@@ -1,0 +1,77 @@
+# Trusted Publishers List
+# CompanyName ที่ตรงกัน (case-insensitive, partial match) จะถูกข้ามอัตโนมัติ
+# เฉพาะไฟล์ที่ผ่าน ssdeep threshold แล้วเท่านั้นที่จะถูกตรวจ CompanyName
+# สามารถเพิ่ม/ลบ/คอมเมนต์ได้เองโดยไม่ต้อง recompile
+
+# ─── Microsoft ───────────────────────────────────────────
+microsoft corporation
+microsoft windows
+microsoft visual c++
+newtonsoft
+
+# ─── Python ──────────────────────────────────────────────
+python software foundation
+
+# ─── Node.js / JavaScript ────────────────────────────────
+node.js foundation
+joyent
+openjs foundation
+
+# ─── Java ────────────────────────────────────────────────
+oracle corporation
+oracle america
+eclipse foundation
+adoptopenjdk
+azul systems
+bellsoft
+
+# ─── Git ─────────────────────────────────────────────────
+the git development community
+git for windows
+
+# ─── Package Managers / Dev Tools ────────────────────────
+github, inc.
+github desktop
+jetbrains s.r.o.
+visual studio code
+microsoft open source
+
+# ─── Compression / Archive ───────────────────────────────
+igor pavlov
+7-zip
+
+# ─── Browsers ────────────────────────────────────────────
+google llc
+mozilla corporation
+mozilla foundation
+the chromium authors
+
+# ─── Databases ───────────────────────────────────────────
+postgresql global development group
+mysql ab
+sqlite
+
+# ─── Security Tools ──────────────────────────────────────
+openssl software foundation
+the openssl project
+
+# ─── Conda / Anaconda ────────────────────────────────────
+anaconda, inc.
+continuum analytics
+
+# Hardware Vendors ────────────────────────────────────
+Intel 
+AMD
+NVIDIA
+Realtek
+HP
+Dell
+LEVONO
+
+# ─── Other Common Runtimes ───────────────────────────────
+free software foundation
+gnu project
+the rust project developers
+golang
+python
+

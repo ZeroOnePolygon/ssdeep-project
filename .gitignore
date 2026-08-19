@@ -1,0 +1,21 @@
+# Binaries
+scanner
+scanner.exe
+scanner.exe~
+scanner_linux
+scanner_linux_arm64
+*.exe
+
+# Database (local / large)
+signatures.db
+
+# Models
+malware_model.bin
+
+# ไฟล์แคชและรายงาน
+cache.db
+scan_report.json
+scan_report.csv
+
+# API keys
+vt_keys.txt
