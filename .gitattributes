@@ -1,0 +1,2 @@
+signatures.db filter=lfs diff=lfs merge=lfs -text
+malware_model.bin filter=lfs diff=lfs merge=lfs -text
