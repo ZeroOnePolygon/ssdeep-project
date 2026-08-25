@@ -107,7 +107,7 @@ scanner.exe C:\Users\Admin\Downloads -clear-cache -threshold 90
 | รายการ | ค่า |
 |--------|-----|
 | **Similarity Threshold** | **85%** ขึ้นไปถึงแจ้งเตือน | default
-| **FP Suppression** | ถ้า VT ยืนยัน 0 detections → ข้าม alert อัตโนมัติ |
+| **FP Suppression** | ถ้า VT ยืนยัน 0 detections → ข้าม alert อัตโนมัติหรือ CLEAN ถ้าเปิดการแจ้งเตือน|
 | **ขนาดไฟล์ขั้นต่ำ** | 4 KB + 1 byte|
 | **ขนาดไฟล์สูงสุด** | 50 MB |
 | **นามสกุลที่สแกน** | 	
@@ -397,7 +397,7 @@ your_api_key_2_here
 
 | **=== Configure Target Extensions ===** |
 |`Enter EXACT extensions to scan separated by commas (e.g., .exe, .dll).`| กรอกค่านามสกุลไฟล์ที่ต้องการ
-|`Type 'all' to scan all predefined script/executable extensions > .***, .***, .***`| พิมพ์ `all` , นามสกุลไฟล์
+|`Type 'all' to scan all predefined script/executable extensions > .***, .***, .***`| พิมพ์ `all` , นามสกุลไฟล์ที่ต้องการ
 |`Type 'all' to scan all predefined script/executable extensions > .exe, .dll, .so`| ตัวอย่างการกรอก
 |`[+] Scanner will EXACTLY and ONLY scan: .exe, .dll, .so`| สแกนเฉพาะนามสถุลไฟล์ .exe, .dll, .so เท่านั้น
 |`[*] Previous scan results have been reset.`| ผลลัพธ์ก่อนหน้ารีเซ็ต
@@ -416,12 +416,12 @@ your_api_key_2_here
 
 ## สรุปวิธีการสแกนผ่าน CLI flags
 
-| วิธี                | การใช้งาน           | เหมาะกับ  |
-|-------------------|--------                |----------|
-| `-clear-cache`    | ชื่อ + ssdeep hash (CSV) | bulk import จาก Excel/Spreadsheet |
-| `-config-ext`     | ชื่อ + ssdeep hash (JSON) | threat intelligence feeds |
-| `-suppress-vt`    | SQL dump | ย้ายข้อมูลจากฐานข้อมูลอื่น |
-| `-threshold int`  | SHA256 หรือ SHA1 + ชื่อ | ไม่มีไฟล์จริง มีแค่ hash |
+| วิธี                | การใช้งาน           
+|-------------------|--------               
+| `-clear-cache`    | ลบฐานข้อมูลที่เป็นผลลัพธ์เก่า ทำให้สามารถทดสอบซ้ำจากการเทียบค่าคล้ายคลึงกันได้
+| `-config-ext`     | การตั้งค่านามสกุลไฟล์ (File Extension) เพื่อเจาะจงสกุลไฟล์เฉพาะที่ต้องการหรือทั้งหมดก็ได้
+| `-suppress-vt`    | เปิด/ปิด การแสดงผลลัพธ์ ถ้าสแกนแล้วได้ค่า VT=0 สามารถกรอกได้ค่า 0,false(เปิดการแสดงผล) และ 1,true(ปิดการแสดงผล)
+| `-threshold int`  | ตั้งค่าความคล้ายคลึงกันหรือเหมือนกันเท่าไร (แนะนำที่ 85 ) แต่เกณฑ์หลักอยู่ช่วง(65-95)
 
 
 
@@ -434,7 +434,10 @@ ssdeep-scanner/
 ├── db.go                    # จัดการ SQLite (signatures.db, cache.db)
 ├── import.go / export.go    # นำเข้า/ส่งออก ฐานข้อมูลมัลแวร์
 ├── vt.go                    # ระบบเชื่อมต่อ VirusTotal API
-├── trusted*.go              # ระบบตรวจสอบ Publisher และ Authenticode
+├── signature.db             # ฐานข้อมูลที่ใช้เทียบกับไฟล์ที่ต้องการสแกน
+├── trusted.go               # ระบบตรวจสอบ Publisher และ Authenticode
+├──trusted_windows.go        # Windows-only: ตรวจ Authenticode ด้วย WinVerifyTrust และอ่าน CompanyName จาก PE Version Info
+├──trusted_other.go          # โหลดรายชื่อ trusted publishers จาก embedded file และ override จาก trusted_publishers.txt บนดิสก์ 
 ├── trusted_publishers.txt   # รายชื่อ Publisher ที่เชื่อถือได้ (ผู้ใช้สร้างเองได้)
 ├── malware_model.bin        # โมเดล ML (XGBoost) สำหรับคัดกรองความน่าจะเป็น
 ├── vt_keys.txt              # ไฟล์เก็บ VT API Keys

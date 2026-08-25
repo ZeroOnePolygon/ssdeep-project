@@ -6,12 +6,6 @@ scanner_linux
 scanner_linux_arm64
 *.exe
 
-# Database (local / large)
-signatures.db
-
-# Models
-malware_model.bin
-
 # ไฟล์แคชและรายงาน
 cache.db
 scan_report.json
