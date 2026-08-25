@@ -436,8 +436,8 @@ ssdeep-scanner/
 ├── vt.go                    # ระบบเชื่อมต่อ VirusTotal API
 ├── signature.db             # ฐานข้อมูลที่ใช้เทียบกับไฟล์ที่ต้องการสแกน
 ├── trusted.go               # ระบบตรวจสอบ Publisher และ Authenticode
-├──trusted_windows.go        # Windows-only: ตรวจ Authenticode ด้วย WinVerifyTrust และอ่าน CompanyName จาก PE Version Info
-├──trusted_other.go          # โหลดรายชื่อ trusted publishers จาก embedded file และ override จาก trusted_publishers.txt บนดิสก์ 
+├── trusted_windows.go        # Windows-only: ตรวจ Authenticode ด้วย WinVerifyTrust และอ่าน CompanyName จาก PE Version Info
+├── trusted_other.go          # โหลดรายชื่อ trusted publishers จาก embedded file และ override จาก trusted_publishers.txt บนดิสก์ 
 ├── trusted_publishers.txt   # รายชื่อ Publisher ที่เชื่อถือได้ (ผู้ใช้สร้างเองได้)
 ├── malware_model.bin        # โมเดล ML (XGBoost) สำหรับคัดกรองความน่าจะเป็น
 ├── vt_keys.txt              # ไฟล์เก็บ VT API Keys
