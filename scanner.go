@@ -24,7 +24,7 @@ import (
 	"github.com/glaslos/ssdeep"
 )
 
-// ANSI Colors
+// ANSI Color Constants
 const (
 	ColorRed    = "\033[91m"
 	ColorGreen  = "\033[92m"
@@ -33,32 +33,47 @@ const (
 	ColorReset  = "\033[0m"
 )
 
+// Execution Parameters
 const (
 	MinFileSize     = 4*1024 + 1
 	MaxFileSize     = 50 * 1024 * 1024
 	MLSafeThreshold = 0.587
 )
 
-var OfflineMode bool
-var dbWriteMutex sync.Mutex
-var Threshold = 85
-var xgbModel *leaves.Ensemble
-var scanResults []ScanResult
-var SuppressCleanVT = true
-var TargetExtensions = map[string]bool{
-	".com": true, ".msi": true, ".msp": true, ".scr": true, ".pif": true,
-	".cpl": true, ".msc": true, ".exe": true, ".dll": true, ".sys": true,
-	".ps1": true, ".bat": true, ".cmd": true, ".vbs": false, ".vbe": true,
-	".jse": true, ".wsf": true, ".hta": true, ".inf": true, ".lnk": true,
-	".url": true, ".docm": true, ".xlsm": true, ".pptm": true, ".rtf": true,
-	".sh": true, ".py": true, ".jar": true, ".so": true, ".dmg": true,
-	".pkg": true, ".command": true,
-}
+var (
+	OfflineMode      bool
+	dbWriteMutex     sync.Mutex
+	Threshold        = 85
+	xgbModel         *leaves.Ensemble
+	scanResults      []ScanResult
+	SuppressCleanVT  = true
+	TargetExtensions = makeDefaultExtensions()
 
-var ExcludedDirs = map[string]bool{
-	"winsxs": true, "$recycle.bin": true, "system volume information": true,
-	"$windows.~bt": true, "$windows.~ws": true, "proc": true, "sys": true,
-	"dev": true, "run": true, "snap": true, "lost+found": true,
+	DefaultTargetExtensions = makeDefaultExtensions()
+
+	ExcludedDirs = map[string]bool{
+		"winsxs": true, "$recycle.bin": true, "system volume information": true,
+		"$windows.~bt": true, "$windows.~ws": true, "proc": true, "sys": true,
+		"dev": true, "run": true, "snap": true, "lost+found": true,
+	}
+
+	bufPool = sync.Pool{
+		New: func() interface{} {
+			return make([]byte, 8192)
+		},
+	}
+)
+
+func makeDefaultExtensions() map[string]bool {
+	return map[string]bool{
+		".com": true, ".msi": true, ".msp": true, ".scr": true, ".pif": true,
+		".cpl": true, ".msc": true, ".exe": true, ".dll": true, ".sys": true,
+		".ps1": true, ".bat": true, ".cmd": true, ".vbs": true, ".vbe": true,
+		".jse": true, ".wsf": true, ".hta": true, ".inf": true, ".lnk": true,
+		".url": true, ".docm": true, ".xlsm": true, ".pptm": true, ".rtf": true,
+		".sh": true, ".py": true, ".jar": true, ".so": true, ".dmg": true,
+		".pkg": true, ".command": true, ".js": true, ".psm1": true, ".psd1": true,
+	}
 }
 
 type Signature struct {
@@ -85,11 +100,32 @@ type ScanStats struct {
 	SkippedMLClean atomic.Int64
 }
 
-// Check if we can reach VirusTotal servers
+type PEMetadata struct {
+	NumSections int
+	BlockSize   int
+	Company     string
+}
+
+type fileJob struct {
+	path  string
+	mtime int64
+}
+
+// Zero-Allocation Target Extension Checker
+func hasTargetExtension(path string, targets map[string]bool) bool {
+	idx := strings.LastIndexByte(path, '.')
+	if idx == -1 || idx == len(path)-1 {
+		return false
+	}
+	ext := path[idx:]
+	if targets[ext] {
+		return true
+	}
+	return targets[strings.ToLower(ext)]
+}
+
 func checkInternetAccess() bool {
-	timeout := 2 * time.Second
-	// Try to establish a TCP connection to VirusTotal on HTTPS port
-	conn, err := net.DialTimeout("tcp", "www.virustotal.com:443", timeout)
+	conn, err := net.DialTimeout("tcp", "www.virustotal.com:443", 2*time.Second)
 	if err != nil {
 		return false
 	}
@@ -107,37 +143,26 @@ func initMLModel() error {
 	return nil
 }
 
-var bufPool = sync.Pool{
-	New: func() interface{} {
-		return make([]byte, 8192)
-	},
-}
-
-// ฟังก์ชันนับจำนวน Sections ของไฟล์ PE (.exe, .dll)
-func getNumSections(path string) int {
+// Single-Pass PE Metadata Extractor (Replaces 3 separate file opens)
+func getPEMetadata(path string) PEMetadata {
+	meta := PEMetadata{}
 	file, err := pe.Open(path)
 	if err != nil {
-		return 0
+		return meta
 	}
 	defer file.Close()
-	return len(file.Sections)
-}
 
-// ฟังก์ชันอ่าน SectionAlignment จาก PE Header
-func getBlockSize(path string) int {
-	file, err := pe.Open(path)
-	if err != nil {
-		return 0
-	}
-	defer file.Close()
+	meta.NumSections = len(file.Sections)
 
 	switch opt := file.OptionalHeader.(type) {
 	case *pe.OptionalHeader32:
-		return int(opt.SectionAlignment)
+		meta.BlockSize = int(opt.SectionAlignment)
 	case *pe.OptionalHeader64:
-		return int(opt.SectionAlignment)
+		meta.BlockSize = int(opt.SectionAlignment)
 	}
-	return 0
+
+	meta.Company, _ = getPECompanyName(path)
+	return meta
 }
 
 func calculateEntropy(filePath string) float64 {
@@ -152,7 +177,7 @@ func calculateEntropy(filePath string) float64 {
 
 	bufObj := bufPool.Get()
 	buf := bufObj.([]byte)
-	defer bufPool.Put(bufObj) // Return to pool when done
+	defer bufPool.Put(bufObj)
 
 	for {
 		n, err := file.Read(buf)
@@ -181,7 +206,8 @@ func calculateEntropy(filePath string) float64 {
 	return entropy
 }
 
-func extractFeatures(fileSize float64, blockSize float64, entropy float64, numSections float64) []float64 {
+// Corrected Positional Mapping for XGBoost Model
+func extractFeatures(fileSize float64, entropy float64, blockSize float64, numSections float64) []float64 {
 	return []float64{
 		fileSize,    // 1. file_size_bytes
 		entropy,     // 2. file_entropy
@@ -192,57 +218,59 @@ func extractFeatures(fileSize float64, blockSize float64, entropy float64, numSe
 
 func configureExtensions() {
 	fmt.Printf("\n%s=== Configure Target Extensions ===%s\n", ColorCyan, ColorReset)
-	fmt.Printf("%sEnter EXACT extensions to scan separated by commas (e.g., .exe, .dll).\nType 'all' to scan all predefined script/executable extensions > %s", ColorYellow, ColorReset)
+	fmt.Printf("%sEnter EXACT extensions to scan separated by commas (e.g., .exe, .dll).\nType 'all' to scan default set, or press ENTER to keep current > %s", ColorYellow, ColorReset)
 
 	scanner := bufio.NewScanner(os.Stdin)
-	if scanner.Scan() {
-		input := strings.TrimSpace(strings.ToLower(scanner.Text()))
-
-		if input == "" {
-			fmt.Printf("%s[!] No changes made.%s\n", ColorRed, ColorReset)
-			return
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			fmt.Printf("%s[!] Input reading error: %v%s\n", ColorRed, err, ColorReset)
 		}
+		return
+	}
 
-		// 1. รีเซ็ตผลการสแกนเดิมทันทีที่มีการเปลี่ยนแปลงตั้งค่า
-		scanResults = nil
+	input := strings.TrimSpace(strings.ToLower(scanner.Text()))
+	if input == "" {
+		fmt.Printf("%s[*] Keeping current extension settings.%s\n", ColorYellow, ColorReset)
+		return
+	}
 
-		if input == "all" {
-			TargetExtensions = map[string]bool{
-				".com": true, ".msi": true, ".msp": true, ".scr": true, ".pif": true,
-				".cpl": true, ".msc": true, ".exe": true, ".dll": true, ".sys": true,
-				".ps1": true, ".bat": true, ".cmd": true, ".vbs": true, ".vbe": true,
-				".jse": true, ".wsf": true, ".hta": true, ".inf": true, ".lnk": true,
-				".url": true, ".docm": true, ".xlsm": true, ".pptm": true, ".rtf": true,
-				".sh": true, ".py": true, ".jar": true, ".so": true, ".dmg": true,
-				".pkg": true, ".command": true,
-			}
-			fmt.Printf("%s[+] Scanner will now scan ALL predefined default extensions.%s\n", ColorGreen, ColorReset)
-			fmt.Printf("%s[*] Previous scan results have been reset.%s\n", ColorCyan, ColorReset)
-			return
+	scanResults = nil
+
+	if input == "all" {
+		newMap := make(map[string]bool, len(DefaultTargetExtensions))
+		for k, v := range DefaultTargetExtensions {
+			newMap[k] = v
 		}
+		TargetExtensions = newMap
+		fmt.Printf("%s[+] Scanner set to default predefined extensions.%s\n", ColorGreen, ColorReset)
+		return
+	}
 
-		TargetExtensions = make(map[string]bool)
-		exts := strings.Split(input, ",")
-		var active []string
-		for _, e := range exts {
-			e = strings.TrimSpace(e)
-			if e == "" {
-				continue
-			}
-			if !strings.HasPrefix(e, ".") {
-				e = "." + e
-			}
-			TargetExtensions[e] = true
+	rawExts := strings.Split(input, ",")
+	newExts := make(map[string]bool, len(rawExts))
+	active := make([]string, 0, len(rawExts))
+
+	for _, e := range rawExts {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		if !strings.HasPrefix(e, ".") {
+			e = "." + e
+		}
+		if !newExts[e] {
+			newExts[e] = true
 			active = append(active, e)
 		}
-
-		fmt.Printf("%s[+] Scanner will EXACTLY and ONLY scan: %s%s\n", ColorGreen, strings.Join(active, ", "), ColorReset)
-		fmt.Printf("%s[*] Previous scan results have been reset.%s\n", ColorCyan, ColorReset)
 	}
 
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("%s[!] Error reading input: %v%s\n", ColorRed, err, ColorReset)
+	if len(newExts) == 0 {
+		fmt.Printf("%s[!] No valid extensions provided. Keeping existing configuration.%s\n", ColorRed, ColorReset)
+		return
 	}
+
+	TargetExtensions = newExts
+	fmt.Printf("%s[+] Target extensions updated to: %s%s\n", ColorGreen, strings.Join(active, ", "), ColorReset)
 }
 
 func isExcludedDir(dirPath string) bool {
@@ -312,12 +340,13 @@ func ScanTargets(directories []string) {
 			activeExts = append(activeExts, ext)
 		}
 	}
-
 	sort.Strings(activeExts)
+
 	fmt.Printf("%s[*] Total signatures : %d items.%s\n", ColorCyan, totalSigs, ColorReset)
 	fmt.Printf("%s[*] Current Threshold: %d%%%s\n", ColorCyan, Threshold, ColorReset)
 	fmt.Printf("%s[*] Target Extensions: %s%s\n", ColorCyan, strings.Join(activeExts, ", "), ColorReset)
 	fmt.Println()
+
 	if OfflineMode {
 		fmt.Printf("%s[*] Offline Mode forced by user flag. VirusTotal disabled.%s\n", ColorYellow, ColorReset)
 	} else {
@@ -330,13 +359,9 @@ func ScanTargets(directories []string) {
 		}
 	}
 	fmt.Println()
+
 	stats := ScanStats{}
 	startTime := time.Now()
-
-	type fileJob struct {
-		path  string
-		mtime int64
-	}
 
 	jobs := make(chan fileJob, 5000)
 	var wg sync.WaitGroup
@@ -382,6 +407,9 @@ func ScanTargets(directories []string) {
 					var alertType string
 					blocksToScan := [3]int{blockSize / 2, blockSize, blockSize * 2}
 
+					// Consolidated single PE header parse
+					peMeta := getPEMetadata(job.path)
+
 				SearchLoop:
 					for _, bSize := range blocksToScan {
 						for idx := range sigMap[bSize] {
@@ -396,11 +424,10 @@ func ScanTargets(directories []string) {
 									break SearchLoop
 								}
 
-								// Layer 2: Trusted publisher
-								company, _ := getPECompanyName(job.path)
-								if company != "" && isTrustedPublisher(company) {
+								// Layer 2: Trusted publisher check
+								if peMeta.Company != "" && isTrustedPublisher(peMeta.Company) {
 									finalAlertMsg = fmt.Sprintf("\n%s[WARN]%s %s | Path: %s | Match: %d%% | Family: %s | ⚠ Unverified Publisher: %s%s",
-										ColorYellow, ColorReset, fileName, dirPath, score, sig.MalwareName, company, ColorReset)
+										ColorYellow, ColorReset, fileName, dirPath, score, sig.MalwareName, peMeta.Company, ColorReset)
 									fmt.Println(finalAlertMsg)
 									stats.SkippedTrusted.Add(1)
 									threatDetected = true
@@ -413,23 +440,16 @@ func ScanTargets(directories []string) {
 									info, err := f.Stat()
 									if err == nil {
 										entropy := calculateEntropy(job.path)
-										fBlockSize := getBlockSize(job.path)
-										numSections := getNumSections(job.path)
 										features := extractFeatures(
 											float64(info.Size()),
 											entropy,
-											float64(fBlockSize),
-											float64(numSections),
+											float64(peMeta.BlockSize),
+											float64(peMeta.NumSections),
 										)
 
 										if len(features) > 0 {
-											features64 := make([]float64, len(features))
-											for i, v := range features {
-												features64[i] = float64(v)
-											}
-
-											prediction := xgbModel.PredictSingle(features64, 0)
-
+											// Direct slice pass without re-allocating features64
+											prediction := xgbModel.PredictSingle(features, 0)
 											if prediction < MLSafeThreshold {
 												stats.SkippedMLClean.Add(1)
 												break SearchLoop
@@ -438,7 +458,7 @@ func ScanTargets(directories []string) {
 									}
 								}
 
-								// Layer 4: VirusTotal check (WITH OFFLINE LOGIC)
+								// Layer 4: VirusTotal check
 								vtScore := ""
 								if OfflineMode {
 									vtScore = " | VT: Skipped (Offline)"
@@ -468,8 +488,8 @@ func ScanTargets(directories []string) {
 								}
 
 								publisherInfo := ""
-								if company != "" {
-									publisherInfo = fmt.Sprintf(" | Publisher: %s", company)
+								if peMeta.Company != "" {
+									publisherInfo = fmt.Sprintf(" | Publisher: %s", peMeta.Company)
 								}
 
 								finalAlertMsg = fmt.Sprintf("\n%s[ALERT] %s | Path: %s | Match: %d%% | Family: %s%s%s%s",
@@ -487,7 +507,6 @@ func ScanTargets(directories []string) {
 						fmt.Printf("\rScanned: %d files...", stats.TotalScanned.Load())
 					}
 
-					// Update Scan Results
 					if threatDetected {
 						statsMutex.Lock()
 						scanResults = append(scanResults, ScanResult{
@@ -506,7 +525,6 @@ func ScanTargets(directories []string) {
 						cacheSsdeep = hash
 					}
 
-					// RAM Leak Fix: Chunk cache updates
 					statsMutex.Lock()
 					updatedCache[job.path] = CacheResult{
 						MTime:    job.mtime,
@@ -523,7 +541,6 @@ func ScanTargets(directories []string) {
 					}
 					statsMutex.Unlock()
 
-					// Save chunk to DB using DB Mutex
 					if mapToFlush != nil {
 						dbWriteMutex.Lock()
 						_ = batchUpdateCache(cacheConn, mapToFlush)
@@ -539,18 +556,22 @@ func ScanTargets(directories []string) {
 			if err != nil {
 				return nil
 			}
+
+			// 1. Fast directory filtering
 			if d.IsDir() {
 				if isExcludedDir(path) {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if !d.Type().IsRegular() {
+
+			// 2. Zero-allocation extension check (Executed BEFORE os.Stat/d.Info)
+			if !hasTargetExtension(path, TargetExtensions) {
+				stats.SkippedFilter.Add(1)
 				return nil
 			}
-			ext := strings.ToLower(filepath.Ext(path))
-			if !TargetExtensions[ext] {
-				stats.SkippedFilter.Add(1)
+
+			if !d.Type().IsRegular() {
 				return nil
 			}
 
@@ -566,7 +587,6 @@ func ScanTargets(directories []string) {
 			}
 
 			mtime := info.ModTime().UnixNano()
-
 			cachedEntry, ok := memoryCache[path]
 
 			if ok && cachedEntry.MTime == mtime {
@@ -603,10 +623,16 @@ func ScanTargets(directories []string) {
 
 	fmt.Printf("\rScanned: %d files... Done!                    \n", stats.TotalScanned.Load())
 
-	if len(updatedCache) > 0 {
+	// Flush remaining cache updates to disk
+	statsMutex.Lock()
+	remainingCache := updatedCache
+	updatedCache = nil
+	statsMutex.Unlock()
+
+	if len(remainingCache) > 0 {
 		fmt.Printf("\n%s[*] Finalizing cache database on disk...%s\n", ColorCyan, ColorReset)
 		dbWriteMutex.Lock()
-		if err := batchUpdateCache(cacheConn, updatedCache); err != nil {
+		if err := batchUpdateCache(cacheConn, remainingCache); err != nil {
 			fmt.Printf("%s[!] Error updating cache: %v%s\n", ColorRed, err, ColorReset)
 		}
 		dbWriteMutex.Unlock()
